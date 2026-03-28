@@ -1,17 +1,66 @@
 import React, { useState, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { UploadCloud, CheckCircle2, RotateCcw, AlertCircle, Users, MapPin, Calendar } from 'lucide-react';
+import { UploadCloud, CheckCircle2, RotateCcw, AlertCircle, Users, MapPin, Calendar, FileSpreadsheet } from 'lucide-react';
 
 export default function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
-  
+  const [isLoading, setIsLoading] = useState(false);
+
   // Settings
   const [refDateStr, setRefDateStr] = useState(new Date().toISOString().split('T')[0]);
   const [excludeKeywords, setExcludeKeywords] = useState('leiding, stam, vzw, bestuur');
 
   const fileInputRef = useRef(null);
+  const dragCounter = useRef(0);
+
+  React.useEffect(() => {
+    const handleWindowDragOver = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handleWindowDragEnter = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter.current++;
+      if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+        setIsDragging(true);
+      }
+    };
+
+    const handleWindowDragLeave = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter.current--;
+      if (dragCounter.current === 0) {
+        setIsDragging(false);
+      }
+    };
+
+    const handleWindowDrop = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      dragCounter.current = 0;
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        processFile(e.dataTransfer.files[0]);
+      }
+    };
+
+    window.addEventListener('dragover', handleWindowDragOver);
+    window.addEventListener('dragenter', handleWindowDragEnter);
+    window.addEventListener('dragleave', handleWindowDragLeave);
+    window.addEventListener('drop', handleWindowDrop);
+
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver);
+      window.removeEventListener('dragenter', handleWindowDragEnter);
+      window.removeEventListener('dragleave', handleWindowDragLeave);
+      window.removeEventListener('drop', handleWindowDrop);
+    };
+  }, []);
 
   const calculateAge = (dob, refDate) => {
     let birthDate;
@@ -30,7 +79,7 @@ export default function App() {
       }
       birthDate = new Date(parsed);
     } else {
-       return null;
+      return null;
     }
 
     if (isNaN(birthDate.getTime())) return null;
@@ -45,6 +94,7 @@ export default function App() {
 
   const processFile = (file) => {
     setError(null);
+    setIsLoading(true);
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -52,12 +102,13 @@ export default function App() {
         const workbook = XLSX.read(ab, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
-        
-        if (rows.length < 2) throw new Error("Het bestand lijkt geen data te hebben.");
 
-        // Find relevant column indices dynamically
+        if (rows.length < 2) {
+          setIsLoading(false);
+          throw new Error("Het bestand lijkt geen data te hebben.");
+        }
+
         const headers = rows[0].map(h => typeof h === 'string' ? h.toLowerCase() : '');
-        
         const getColIdx = (aliases) => {
           for (let alias of aliases) {
             const idx = headers.findIndex(h => h.includes(alias));
@@ -71,14 +122,14 @@ export default function App() {
         const takkenIdx = getColIdx(['tak', 'takken']);
 
         if (postcodeIdx === -1 || dobIdx === -1 || takkenIdx === -1) {
-          throw new Error("Kon niet alle benodigde kolommen vinden (Postcode, Geboortedatum, Takken). Controleer of ze in de Excel staan!");
+          setIsLoading(false);
+          throw new Error("Kon niet alle benodigde kolommen vinden (Postcode, Geboortedatum, Takken).");
         }
 
         const parsedMembers = [];
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
-          if (!row || row.length === 0 || !row[dobIdx]) continue; // Skip empty rows
-          
+          if (!row || row.length === 0 || !row[dobIdx]) continue;
           parsedMembers.push({
             postcode: row[postcodeIdx] ? String(row[postcodeIdx]).trim() : null,
             geboortedatum: row[dobIdx],
@@ -86,8 +137,14 @@ export default function App() {
           });
         }
 
-        setData(parsedMembers);
+        // Add 4 second artificial delay for the message
+        setTimeout(() => {
+          setData(parsedMembers);
+          setIsLoading(false);
+        }, 4000);
+
       } catch (err) {
+        setIsLoading(false);
         setError(err.message);
       }
     };
@@ -99,10 +156,7 @@ export default function App() {
 
   const handleDrop = (e) => {
     e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      processFile(e.dataTransfer.files[0]);
-    }
+    // Handled by global listener
   };
 
   const handleChange = (e) => {
@@ -119,7 +173,7 @@ export default function App() {
     const excludeList = excludeKeywords.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
 
     let totalWithPostcode = 0;
-    
+
     const geo = {
       wilrijk: 0,
       antwerpen: 0,
@@ -177,11 +231,34 @@ export default function App() {
   return (
     <div className="container">
       <div className="header">
+        <img src="/logo.png" alt="Scouts Feniks Logo" style={{ maxWidth: '180px', marginBottom: '1.5rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))' }} />
         <h1>Werkingsubsidies Tool</h1>
         <p>Automatisch uw antwoorden genereren voor de werkingsubsidies van de Stad Antwerpen</p>
       </div>
 
-      {!data && (
+      {isDragging && (
+        <div className="global-drag-overlay">
+          <div className="overlay-content">
+            <FileSpreadsheet size={64} />
+            <h2>Laat de Excel hier los</h2>
+            <p>We verwerken hem direct voor je</p>
+          </div>
+        </div>
+      )}
+
+      {isLoading && (
+        <div className="global-drag-overlay" style={{ background: 'var(--bg-color)', pointerEvents: 'all' }}>
+          <div className="overlay-content" style={{ color: 'var(--primary-700)', maxWidth: '600px', width: '90%' }}>
+            <h2 style={{ fontSize: '3rem', color: 'var(--primary-700)', fontWeight: '800', lineHeight: '1.2' }}>Have fun in de scouts, groetjes Pongo</h2>
+            <div className="loading-bar-container">
+              <div className="loading-bar-fill"></div>
+            </div>
+            <p style={{ color: 'var(--text-secondary)' }}>Data aan het uitsplitsen...</p>
+          </div>
+        </div>
+      )}
+
+      {!data && !isLoading && (
         <div className="card">
           <h2>Hoe kom je aan de Excel?</h2>
           <div className="steps">
@@ -213,7 +290,7 @@ export default function App() {
             </div>
           </div>
 
-          <div 
+          <div
             className={`upload-zone ${isDragging ? 'drag-active' : ''}`}
             onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
@@ -223,17 +300,17 @@ export default function App() {
             <UploadCloud className="upload-icon" />
             <div className="upload-text">Sleep het Excel-bestand hiernaartoe of klik om te uploaden</div>
             <div className="upload-subtext">Verwerking gebeurt lokaal, veilig en snel in uw browser.</div>
-            <input 
-              type="file" 
-              accept=".xlsx,.xls" 
-              className="hidden-input" 
-              ref={fileInputRef} 
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden-input"
+              ref={fileInputRef}
               style={{ display: 'none' }}
               onChange={handleChange}
             />
           </div>
           {error && (
-            <div style={{color: 'red', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+            <div style={{ color: 'red', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <AlertCircle size={18} /> {error}
             </div>
           )}
@@ -242,36 +319,20 @@ export default function App() {
 
       {data && stats && (
         <div className="animate-fade-in card">
-          <div className="settings">
-            <div className="form-group">
-              <label>Peildatum voor leeftijd</label>
-              <input type="date" value={refDateStr} onChange={(e) => setRefDateStr(e.target.value)} />
-            </div>
-            <div className="form-group" style={{flex: 1, minWidth: '250px'}}>
-              <label>Sluit takken met deze woorden uit (voor vraag 2)</label>
-              <input type="text" value={excludeKeywords} onChange={(e) => setExcludeKeywords(e.target.value)} placeholder="bijv. leiding, stam" />
-            </div>
-            <div>
-              <button className="reset-btn" onClick={() => setData(null)}>
-                <RotateCcw /> Nieuw Bestand
-              </button>
-            </div>
-          </div>
-          
+
           <div className="results-section">
             <div className="mb-4">
-              <span style={{background: 'var(--primary-100)', color: 'var(--primary-700)', padding: '0.5rem 1rem', borderRadius: 'var(--radius-xl)', fontWeight: '500', display: 'inline-flex', alignItems: 'center', gap: '0.5rem'}}>
-                <CheckCircle2 size={18}/> Ingelezen leden: {data.length}
+              <span style={{ background: 'var(--primary-100)', color: 'var(--primary-700)', padding: '0.5rem 1rem', borderRadius: 'var(--radius-xl)', fontWeight: '500', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                <CheckCircle2 size={18} /> Ingelezen leden: {data.length}
               </span>
             </div>
-            
-            <p className="upload-subtext" style={{marginBottom: '2rem'}}>
-              Deze tool beantwoordt o.a. de geografische wegingen, leeftijdscategorie en takverdeling. 
-              Gezien een subsidie-aanvraag complex is, kijk ook even naar een indiening van vorig jaar voor andere simpele ja/nee vragen!
+
+            <p className="upload-subtext" style={{ marginBottom: '2rem' }}>
+              Deze tool helpt je met het invullen van de werkingssubsidies van de stad antwerpen. Sommige zaken moet je nog zelf invullen, zoals de ja/nee vragen, kijk hiervoor eventueel naar een indiening van vorig jaar.
             </p>
 
             {/* Geografie */}
-            <h2><MapPin size={24} color="var(--primary-600)"/> Geografie (% van de leden/deelnemers)</h2>
+            <h2><MapPin size={24} color="var(--primary-600)" /> Geografie (% van de leden/deelnemers)</h2>
             <div className="stat-grid">
               <div className="stat-box">
                 <span className="stat-label">District Wilrijk *</span>
@@ -308,27 +369,27 @@ export default function App() {
             <hr className="results-divider" />
 
             {/* Youth Count */}
-            <h2><Calendar size={24} color="var(--primary-600)"/> Aantal leden tussen 6 t/m 25 jaar (geen begeleiders)</h2>
-            <div className="stat-box highlight" style={{maxWidth: '400px'}}>
+            <h2><Calendar size={24} color="var(--primary-600)" /> Aantal leden tussen 6 t/m 25 jaar (geen begeleiders)</h2>
+            <div className="stat-box highlight" style={{ maxWidth: '400px' }}>
               <span className="stat-value">{stats.youthCount} leden</span>
-              <span className="stat-subvalue" style={{color: 'var(--text-primary)', marginTop: '0.5rem'}}>
-                <strong>Tip:</strong> Vermeld bij het antwoord dat hier mogelijks mensen met een beperking bijzitten.
+              <span className="stat-subvalue" style={{ color: 'var(--text-primary)', marginTop: '0.5rem' }}>
+                <strong>Let op:</strong> Mogelijks zijn hier mensen met een beperking bij gerekend.
               </span>
             </div>
 
             <hr className="results-divider" />
 
             {/* Takken */}
-            <h2><Users size={24} color="var(--primary-600)"/> Opdeling in takken</h2>
-            <p style={{marginBottom: '1.5rem', color: 'var(--text-secondary)'}}>
+            <h2><Users size={24} color="var(--primary-600)" /> Opdeling in takken</h2>
+            <p style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>
               Vul per tak de leeftijden en aantallen aan in je document. Totaal deelnemers van alle takken tezamen: <strong>{stats.totalTakkenDeelnemers}</strong>
             </p>
-            
+
             <div className="takken-grid">
               {stats.ObjectKeys.sort().map(tak => {
                 const t = stats.takkenMap[tak];
                 const ageText = t.count === 0 || t.minAge === 999 ? "Onbekend" : `${t.minAge} - ${t.maxAge} jaar`;
-                
+
                 return (
                   <div key={tak} className="tak-card">
                     <h3>{tak}</h3>
@@ -348,6 +409,10 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <footer style={{ textAlign: 'center', marginTop: '3rem', padding: '2rem 0', borderTop: '1px solid var(--border-color)', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+        <p>Have fun in de scouts, groetjes Pongo</p>
+      </footer>
     </div>
   );
 }

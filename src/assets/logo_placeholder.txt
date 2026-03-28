@@ -1,0 +1,3 @@
+<header class="logo-header">
+  <img src="/src/assets/logo.png" alt="Scouts Feniks Logo" class="logo-img" />
+</header>
