@@ -1,0 +1,4 @@
+/* Netlify specific styles if any, or just empty to keep it standard */
+#root {
+  min-height: 100vh;
+}
